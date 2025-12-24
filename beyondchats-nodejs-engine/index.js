@@ -1,167 +1,243 @@
-const { GoogleGenerativeAI } = require("@google/generative-ai");
-const axios = require("axios");
 require("dotenv").config();
+const axios = require("axios");
+const cheerio = require("cheerio");
 
-// --- Configuration ---
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const LARAVEL_API_URL = process.env.LARAVEL_API_URL || "http://127.0.0.1:8000";
-const GEMINI_MODEL = "gemini-1.5-flash";
+const LARAVEL_API_BASE =
+  process.env.LARAVEL_API_BASE || "http://127.0.0.1:8000/api";
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
-if (!GEMINI_API_KEY) {
-  console.error("Fatal Error: GEMINI_API_KEY is not defined in your .env file.");
-  process.exit(1);
+function makeUpdatedTitle(originalTitle) {
+  if (originalTitle.trim().endsWith()) {
+    return originalTitle;
+  }
+  return `${originalTitle}`;
 }
 
-// --- Main Execution ---
-async function main() {
-  console.log("Starting content engine...");
+// ------------ Helper: Latest Article from Laravel ---------------
+async function fetchLatestArticle() {
+  const res = await axios.get(`${LARAVEL_API_BASE}/articles`);
+  const list = res.data;
 
-  let latestArticle;
-
-  // 1) Fetch latest article from Laravel
-  try {
-    console.log(`Fetching articles from ${LARAVEL_API_URL}/api/articles...`);
-    const response = await axios.get(`${LARAVEL_API_URL}/api/articles`);
-    const articles = response.data.data || response.data; // paginated or plain
-
-    if (!Array.isArray(articles) || articles.length === 0) {
-      console.log("No articles found in the database. Exiting.");
-      return;
-    }
-
-    // Pick article with highest id
-    latestArticle = articles.reduce((latest, current) =>
-      latest.id > current.id ? latest : current
-    );
-
-    console.log(
-      `Selected latest article (ID: ${latestArticle.id}): "${latestArticle.title}"`
-    );
-  } catch (error) {
-    handleApiError(error, "Failed to fetch articles from Laravel API");
-    return;
+  if (!Array.isArray(list) || list.length === 0) {
+    throw new Error("No articles found in Laravel API");
   }
 
-  // 2) Call Gemini to rewrite content
-  try {
-    console.log(`Generating rewritten content with ${GEMINI_MODEL}...`);
+  list.sort((a, b) => b.id - a.id);
+  const latest = list[0];
 
-    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({
-      model: GEMINI_MODEL,
-      generationConfig: { responseMimeType: "application/json" },
+  console.log("Latest article from Laravel:", latest.id, latest.title);
+  return latest;
+}
+
+// ------------ Helper: Google Search ----------------------------
+async function searchGoogle(query) {
+  const q = encodeURIComponent(query);
+  const url = `https://www.google.com/search?q=${q}&num=10`;
+
+  try {
+    const res = await axios.get(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+          "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+      },
     });
 
-    const prompt = buildPrompt(latestArticle.original_content);
-    const result = await model.generateContent(prompt);
-    const geminiResponseText = result.response.text();
+    const $ = cheerio.load(res.data);
+    const results = [];
 
-    let geminiOutput;
-    try {
-      geminiOutput = JSON.parse(geminiResponseText);
+    $("a").each((_, el) => {
+      const href = $(el).attr("href") || "";
+      if (!href.startsWith("/url?q=")) return;
+
+      const actualUrl = decodeURIComponent(
+        href.split("/url?q=")[1].split("&")[0]
+      );
 
       if (
-        !geminiOutput.rewrittenContent ||
-        !Array.isArray(geminiOutput.references)
+        actualUrl.includes("google.") ||
+        actualUrl.includes("youtube.com") ||
+        actualUrl.includes("beyondchats.com")
       ) {
-        throw new Error(
-          "Gemini output missing 'rewrittenContent' or 'references' array."
-        );
+        return;
       }
-    } catch (parseError) {
-      console.error("Error: Failed to parse Gemini's JSON response.");
-      console.error("Gemini raw response:", geminiResponseText);
-      console.error("Parsing error details:", parseError.message);
-      return;
-    }
 
-    console.log("Successfully generated content from Gemini.");
+      if (!results.includes(actualUrl)) {
+        results.push(actualUrl);
+      }
+    });
 
-    // 3) Update article in Laravel
-    const updatePayload = {
-      rewritten_content: geminiOutput.rewrittenContent,
-      references: geminiOutput.references || [],
-    };
-
-    console.log(
-      `Updating article (ID: ${latestArticle.id}) in Laravel API...`
-    );
-    await axios.put(
-      `${LARAVEL_API_URL}/api/articles/${latestArticle.id}`,
-      updatePayload
-    );
-
-    console.log("\n✅ Success! Article rewritten and updated.");
-    console.log("-----------------------------------------");
-    console.log(`Article Title: ${latestArticle.title}`);
-    console.log("Rewritten Content Snippet:");
-    console.log(
-      `"${updatePayload.rewritten_content.substring(0, 200)}..."`
-    );
-    console.log("-----------------------------------------");
-  } catch (error) {
-    if (error.response) {
-      handleApiError(
-        error,
-        `An API error occurred during processing for article ID ${latestArticle.id}`
-      );
-    } else if (error.request) {
-      console.error(
-        "Network Error: Could not connect to the service. Please check your network and the service status."
-      );
-      console.error(`Details: ${error.message}`);
-    } else {
-      console.error("An unexpected error occurred:", error.message);
-    }
+    const topTwo = results.slice(0, 2);
+    console.log("Top 2 reference URLs:", topTwo);
+    return topTwo;
+  } catch (e) {
+    console.error("Google search failed:", e.message);
+    return [];
   }
 }
 
-// --- Helper Functions ---
+// ------------ Helper: Scrape blog content ----------------------
+async function scrapeMainContent(url) {
+  try {
+    const res = await axios.get(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+          "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+      },
+      timeout: 15000,
+    });
 
-function buildPrompt(originalContent) {
-  return `
-You are an expert content strategist and SEO specialist.
+    const $ = cheerio.load(res.data);
 
-Rewrite the following article to be professional, engaging, and highly optimized for search engines.
+    const candidates = [
+      "article",
+      "main article",
+      "main",
+      ".post-content",
+      ".entry-content",
+      ".blog-content",
+    ];
 
-Your task is to:
-1. Preserve the core meaning, facts, and intent of the original text.
-2. Improve the structure using clear headings (##) and subheadings (###).
-3. Use an authoritative but accessible tone.
-4. Improve readability without keyword stuffing.
-5. Generate 3–5 realistic, relevant reference URLs.
+    let text = "";
+    for (const sel of candidates) {
+      if ($(sel).length) {
+        text = $(sel)
+          .text()
+          .replace(/\s+\n/g, "\n")
+          .trim();
+        if (text) break;
+      }
+    }
 
-Return a single, valid JSON object with:
-{
-  "rewrittenContent": "full rewritten article as Markdown string",
-  "references": ["https://example.com/1", "..."]
+    if (!text) {
+      text = $("p")
+        .map((_, el) => $(el).text())
+        .get()
+        .join("\n\n")
+        .replace(/\s+\n/g, "\n")
+        .trim();
+    }
+
+    if (!text || text.length < 300) {
+      console.warn("Scraped content too short from:", url);
+      return null;
+    }
+
+    console.log(
+      "Scraped content length from",
+      url,
+      "=>",
+      text.length,
+      "chars"
+    );
+    return text;
+  } catch (e) {
+    console.error("Error scraping", url, e.message);
+    return null;
+  }
 }
+
+// ------------ Helper: LLM rewrite via OpenRouter ---------------
+async function rewriteArticle(original, refContents) {
+  const validRefs = Array.isArray(refContents) ? refContents : [];
+
+  const refsText = validRefs
+    .map(
+      (r, i) =>
+        `Reference ${i + 1} (URL: ${r.url}):\n${r.content.slice(0, 2000)}`
+    )
+    .join("\n\n");
+
+  const prompt = `
+You are an SEO content writer.
 
 Original article:
----
-${originalContent}
----
+"${original.original_content}"
+
+${refsText ? "Reference articles:\n" + refsText : ""}
+
+Task:
+Rewrite the original article so that:
+- Preserve the main meaning.
+- Improve clarity and readability.
+- Use headings and short paragraphs.
+- Be suitable for a tech startup blog.
+
+Return only the rewritten article text, no explanations.
 `;
-}
 
-function handleApiError(error, contextMessage) {
-  console.error(`Error: ${contextMessage}.`);
-  if (error.response) {
-    console.error(
-      `  - Status: ${error.response.status} ${error.response.statusText}`
-    );
-    console.error(
-      `  - URL: ${error.config.method.toUpperCase()} ${error.config.url}`
-    );
-    const responseData = error.response.data;
-    if (typeof responseData === "object") {
-      console.error(`  - Details: ${JSON.stringify(responseData, null, 2)}`);
-    } else {
-      console.error(`  - Response: ${responseData}`);
-    }
-  } else {
-    console.error(`  - Details: ${error.message}`);
+  if (!OPENROUTER_API_KEY) {
+    throw new Error("OPENROUTER_API_KEY is missing in .env");
   }
+
+  const res = await axios.post(
+    "https://openrouter.ai/api/v1/chat/completions",
+    {
+      model: "openai/gpt-4o-mini", // ya koi aur OpenRouter-supported model
+      messages: [{ role: "user", content: prompt }],
+    },
+    {
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+      },
+    }
+  );
+
+  const text = res.data.choices[0].message.content.trim();
+  console.log("Received rewritten article, length:", text.length);
+  return text;
 }
 
-main();
+// ------------ Helper: Publish updated article ------------------
+async function publishUpdatedArticle(original, rewrittenText, refContents) {
+  const references = (Array.isArray(refContents) ? refContents : []).map(
+    (r) => r.url
+  );
+
+  const payload = {
+    title: original.title + " (Updated)",
+    original_content: original.original_content,
+    rewritten_content: rewrittenText,
+    references,
+  };
+
+  const res = await axios.post(`${LARAVEL_API_BASE}/articles`, payload);
+  console.log("Published updated article id:", res.data.id);
+}
+
+// ------------ Main Flow ----------------------------------------
+async function main() {
+  const latest = await fetchLatestArticle();
+
+  const refUrls = await searchGoogle(latest.title);
+  if (refUrls.length === 0) {
+    console.warn(
+      "No suitable reference URLs found, continuing without them."
+    );
+  }
+
+  const refContents = [];
+  for (const url of refUrls) {
+    const content = await scrapeMainContent(url);
+    if (content) refContents.push({ url, content });
+  }
+
+  if (refContents.length === 0) {
+    console.warn(
+      "Failed to scrape reference content, rewriting using only original article."
+    );
+  }
+
+  const rewritten = await rewriteArticle(latest, refContents);
+
+  await publishUpdatedArticle(latest, rewritten, refContents);
+
+  console.log("Done.");
+}
+
+// Run script
+main().catch((err) => {
+  console.error("Fatal error:", err);
+});

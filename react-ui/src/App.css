@@ -14,13 +14,13 @@
 
 /* --- Sidebar --- */
 .sidebar {
-  width: 320px;
+  width: 280px;
   flex-shrink: 0;
   background-color: var(--color-sidebar-bg);
   border-right: 1px solid var(--color-border);
   display: flex;
   flex-direction: column;
-  box-shadow: 2px 0 8px rgba(15, 23, 42, 0.06);
+  box-shadow: 2px 0 12px rgba(15, 23, 42, 0.08);
 }
 
 .sidebar-subtitle {
@@ -42,22 +42,19 @@
 
 /* Article list */
 .article-list {
-  list-style: none;
-  margin: 0;
-  padding: var(--space-2);
-  overflow-y: auto;
-  flex-grow: 1;
+  padding: var(--space-3);
+  gap: 4px;
+  display: flex;
+  flex-direction: column;
 }
 
 .article-list-item {
-  padding: 0.85rem var(--space-3);
-  margin-bottom: var(--space-1);
-  border-radius: 6px;
+  padding: 0.7rem 0.9rem;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  font-size: 0.9rem;
   cursor: pointer;
-  transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out,
-    border-left-color 0.2s ease-in-out;
-  font-weight: 500;
-  border-left: 3px solid transparent;
+  transition: background-color 0.2s ease-in-out;
 }
 
 .article-list-item:hover {
@@ -76,6 +73,8 @@
   flex-grow: 1;
   padding: var(--space-5);
   overflow-y: auto;
+  display: flex;
+  justify-content: center; /* center horizontally */
 }
 
 /* --- States (Loading, Error, Empty) --- */
@@ -96,10 +95,22 @@
 
 /* --- Article Detail View --- */
 .article-detail-card {
+  position: relative;
+  overflow: hidden;
   background-color: var(--color-card-bg);
   border-radius: 8px;
   border: 1px solid var(--color-border);
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+  max-width: 900px;
+  width: 100%;
+}
+
+.article-detail-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 4px;
+  background: linear-gradient(90deg, #2563eb, #22c55e);
 }
 
 .article-header {
@@ -109,9 +120,9 @@
 
 .article-header h2 {
   margin: 0;
-  font-size: 1.75rem;
+  font-size: 1.5rem; /* thoda chhota */
   font-weight: 700;
-  line-height: 1.2;
+  line-height: 1.35;
 }
 
 .article-body {
@@ -119,12 +130,12 @@
 }
 
 .article-meta {
-  margin: 0.25rem 0 0;
-  font-size: 0.85rem;
+  margin-top: 0.35rem;
+  font-size: 0.8rem;
   color: var(--color-secondary-text);
 }
 
-
+/* Sections */
 .content-section {
   margin-bottom: var(--space-5);
 }
@@ -133,19 +144,10 @@
   margin-bottom: 0;
 }
 
-.content-section h3 {
-  margin-top: 0;
-  margin-bottom: var(--space-3);
-  font-size: 1rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--color-secondary-text);
-}
-
 .content-block {
-  line-height: 1.6;
-  white-space: pre-wrap; /* respect newlines in content */
+  font-size: 0.95rem;
+  line-height: 1.7;
+  white-space: pre-wrap;
 }
 
 .fallback-text {
